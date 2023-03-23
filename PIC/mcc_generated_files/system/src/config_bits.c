@@ -61,7 +61,7 @@
 #pragma config XINST = OFF     // Extended Instruction Set Enable->Extended Instruction Set and Indexed Addressing Mode disabled
 #pragma config ZCD = OFF     // ZCD Disable->ZCD disabled. ZCD can be enabled by setting the ZCDSEN bit of ZCDCON
 #pragma config STVREN = ON     // Stack Overflow/Underflow Reset Enable->Stack full/underflow will cause Reset
-#pragma config BORV = VBOR_2P45     // Brown-out Reset Voltage Selection->Brown-out Reset Voltage (VBOR) set to 2.45V
+#pragma config BORV = VBOR_190     // Brown-out Reset Voltage Selection->Brown-out Reset Voltage (VBOR) set to 1.90V
 #pragma config PPS1WAY = ON     // PPSLOCKED bit One-Way Set Enable->PPSLOCK bit can be cleared and set only once; PPS registers remain locked after one clear/set cycle
 
 //CONFIG3L
