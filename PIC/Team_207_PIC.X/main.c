@@ -67,6 +67,8 @@
 #define AS_ANGLE1 0x0F //AS5600 ANLGE 11:8 Bits Register
 #define AS_ANGLE2 0x0E //AS5600 ANGLE 7:0 Bits Register
 #define ANGLE_CHECK 0x800
+#define BUFFER_SIZE 256 
+#define MOTOR_RUN_TIME_MS 5000
 
 //Global Variables
 uint8_t bur[2];
@@ -75,16 +77,26 @@ float A = 11.375;
 float degree = 0;
 uint8_t motorDirection = 0; // 0 - Forward, 1 - Backward
 bool timerOverflowFlag = false;
-uint8_t timer_ms = 0;
-uint8_t timer_s = 0;
+uint32_t motorStartTime = 0;
+uint16_t timer_ms = 0;
+uint16_t timer_s = 0;
 float time = 0.0;
-char ESP32RxBuffer[100];
+uint8_t ESP32RxBuffer[BUFFER_SIZE];
+uint8_t ESP32TxBuffer[BUFFER_SIZE];
+uint8_t rxByte;
+uint8_t rxIndex = 0;
+bool ESPrxComplete = false;
+uint8_t endingIndex = 0;
+uint8_t startingIndex = 0;
+uint8_t lengthMessage = 0;
+uint8_t messageTest[4];
 
 //Function Declarations
 void motorControl(uint8_t enable);
 void timer0InterruptHandler(void);
 void UART1ISR(void); // Connected to Debug UART Header RX RC7 and TX RC5
 void UART2ISR(void); // Connected to ESP32 Via RX RC0 and TX RC1
+void UART2WriteMessage(uint8_t *message, uint8_t startIndex, uint8_t length); // Write multiple bytes of data to form a full message
 int8_t readTemperature(void); // Must be run after i2c is initialized
 
 
@@ -123,7 +135,9 @@ void main(void)
     SSP2STATbits.CKE = 0; // Clock Edge (CPHA)
     
     uint8_t temp;
+    uint16_t angle;
     bool motorRunning = false;    
+    bool thresholdCrossed = false;
     
     while (1)
     {
@@ -141,7 +155,8 @@ void main(void)
 
             angle = data1 << 8;
             angle += data2;
-
+            
+            
             /*if(temp >= 27 || magnet > ANGLE_CHECK){
                 DEBUG_LED_SetHigh(); //Turn on Debug LED
                 motorControl(1); //Enable Motor
@@ -149,15 +164,35 @@ void main(void)
                 DEBUG_LED_SetLow(); // Turn off Debug LED
                 motorControl(0); // Disable motor
             }*/
-            if ((temp >= 27 || angle > ANGLE_CHECK) && !motorRunning) {
+             if ((temp >= 27 || angle > ANGLE_CHECK) && !motorRunning && !thresholdCrossed) {
                 motorControl(1); // Enable motor
                 motorRunning = true;
-            } else if (motorRunning && timerOverflowFlag) {
+                motorStartTime = TMR0_ReadTimer();
+                thresholdCrossed = true;
+            } else if (!thresholdCrossed) {
+                motorDirection = !motorDirection; // Toggle motor direction
+                motorControl(1); // Enable motor
+                motorRunning = true;
+                motorStartTime = TMR0_ReadTimer();
+                thresholdCrossed = true;
+                }
+             if (motorRunning && (TMR0_ReadTimer() - motorStartTime) >= MOTOR_RUN_TIME_MS) {
+                motorControl(0); // Disable motor
                 motorRunning = false;
-                timerOverflowFlag = false;
-            }
+                motorDirection = !motorDirection; // Toggle motor direction
+                }
         }
         __delay_ms(50);
+        if(ESPrxComplete){
+            //UART2WriteMessage(*ESP32RxBuffer, startingIndex, lengthMessage);
+            ESPrxComplete = false;
+        }
+        messageTest[0] = 0;
+        messageTest[1] = 1;
+        messageTest[2] = 2;
+        messageTest[3] = ';';
+        
+        //UART2WriteMessage(*messageTest, 0, 3);
     }
     SPI2_Close();
 }
@@ -198,8 +233,33 @@ void UART1ISR(void){
 
 void UART2ISR(void){
     EUSART2_Receive_ISR();
+    if(EUSART2_is_rx_ready()){
+        rxByte = EUSART2_Read();
+    }
+    ESP32RxBuffer[rxIndex] = rxByte;
+    if(rxByte == ';'){
+        ESPrxComplete = true;
+        endingIndex = rxIndex;
+        lengthMessage = endingIndex - startingIndex;
+    }
+    if(rxByte == '_'){
+        startingIndex = rxIndex;
+    }
+    if(rxIndex >= 255){
+        rxIndex = 0;
+    }
+    else{
+        rxIndex++;
+    }
+    DEBUG_LED_Toggle();
     
-    
+}
+
+void UART2WriteMessage(uint8_t *message, uint8_t startIndex, uint8_t length){
+    uint8_t i;
+    for(i = 0; i < length; i++){
+        EUSART2_Write(message[startIndex+i]);
+    }
 }
 
 int8_t readTemperature(void){
