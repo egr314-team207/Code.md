@@ -41,6 +41,18 @@
     SOFTWARE.
 */
 
+/*
+ * Arizona State University
+ * Spring 2023
+ * EGR 314
+ * Professor: Daniel Aukes
+ * Team 207
+ * Radge Chaira
+ * Stefano Greco
+ * Hector Peralta
+ * Daymon Wilkins
+ */
+
 #include "mcc_generated_files/mcc.h"
 #include "mcc_generated_files/examples/i2c1_master_example.h"
 
@@ -49,10 +61,11 @@
                          Main application
  */
 // Definitions 
-#define address 0x4C
-#define tempreg 0x00
-#define AS_ANGLE1 0x0F
-#define AS_ANGLE2 0x0E
+#define TC74_ADDRESS 0x4c // TC74A4-3.3VCT ADDRESS IS 0b1001100
+#define TEMPERATURE_READ 0x00 //RTR Read TEMP Register 
+#define AS5600_ADDRESS 0x36 //AS5600 ADDRESS IS 0b0110110
+#define AS_ANGLE1 0x0F //AS5600 ANLGE 11:8 Bits Register
+#define AS_ANGLE2 0x0E //AS5600 ANGLE 7:0 Bits Register
 #define ANGLE_CHECK 0x800
 
 //Global Variables
@@ -61,10 +74,19 @@ uint16_t magnet;
 float A = 11.375;
 float degree = 0;
 uint8_t motorDirection = 0; // 0 - Forward, 1 - Backward
+bool timerOverflowFlag = false;
+uint8_t timer_ms = 0;
+uint8_t timer_s = 0;
+float time = 0.0;
+char ESP32RxBuffer[100];
 
 //Function Declarations
 void motorControl(uint8_t enable);
 void timer0InterruptHandler(void);
+void UART1ISR(void); // Connected to Debug UART Header RX RC7 and TX RC5
+void UART2ISR(void); // Connected to ESP32 Via RX RC0 and TX RC1
+int8_t readTemperature(void); // Must be run after i2c is initialized
+
 
 void main(void)
 {
@@ -73,18 +95,11 @@ void main(void)
     EUSART1_Initialize();
     I2C1_Initialize();
     PIN_MANAGER_Initialize();
-    INTERRUPT_GlobalInterruptEnable();
-    INTERRUPT_PeripheralInterruptEnable();
-    SPI2_Open(SPI2_DEFAULT); //SPI activation
-    TMR0_SetInterruptHandler(timer0InterruptHandler);
-    TMR0_StartTimer();
-    
-    SSP2CON1bits.CKP = 0; // Clock Polarity (CPOL)
-    SSP2STATbits.CKE = 0; // Clock Edge (CPHA)
-    
-    uint8_t temp;
-    bool motorRunning = false;
-    
+
+    // Custom Interrupt Handler Declarations
+    EUSART1_SetRxInterruptHandler(* UART1ISR);
+    EUSART2_SetRxInterruptHandler(* UART2ISR);
+    TMR0_SetInterruptHandler(* timer0InterruptHandler);
     // If using interrupts in PIC18 High/Low Priority Mode you need to enable the Global High and Low Interrupts
     // If using interrupts in PIC Mid-Range Compatibility Mode you need to enable the Global and Peripheral Interrupts
     // Use the following macros to:
@@ -101,10 +116,19 @@ void main(void)
     // Disable the Peripheral Interrupts
     //INTERRUPT_PeripheralInterruptDisable();
 
+    SPI2_Open(SPI2_DEFAULT); //SPI activation
+    TMR0_StartTimer();
+    
+    SSP2CON1bits.CKP = 0; // Clock Polarity (CPOL)
+    SSP2STATbits.CKE = 0; // Clock Edge (CPHA)
+    
+    uint8_t temp;
+    bool motorRunning = false;    
+    
     while (1)
     {
         if (EUSART1_is_tx_ready()){
-            temp = I2C1_Read1ByteRegister(address, tempreg);
+            temp = I2C1_Read1ByteRegister(TC74_ADDRESS, TEMPERATURE_READ);
             __delay_ms(200);
 
             uint8_t data1 = 0x00;
@@ -118,12 +142,19 @@ void main(void)
             angle = data1 << 8;
             angle += data2;
 
-            if(temp >= 27 || magnet > ANGLE_CHECK){
+            /*if(temp >= 27 || magnet > ANGLE_CHECK){
                 DEBUG_LED_SetHigh(); //Turn on Debug LED
                 motorControl(1); //Enable Motor
             } else{
                 DEBUG_LED_SetLow(); // Turn off Debug LED
                 motorControl(0); // Disable motor
+            }*/
+            if ((temp >= 27 || angle > ANGLE_CHECK) && !motorRunning) {
+                motorControl(1); // Enable motor
+                motorRunning = true;
+            } else if (motorRunning && timerOverflowFlag) {
+                motorRunning = false;
+                timerOverflowFlag = false;
             }
         }
         __delay_ms(50);
@@ -149,11 +180,33 @@ void motorControl(uint8_t enable) {
 }
 
 void timer0InterruptHandler(void) {
-    motorControl(0); // Disable motor
-    motorDirection = !motorDirection; // Toggle motor direction
-   // TMR0_Reload(); // Reset the timer
+    //motorControl(0); // Disable motor
+    //motorDirection = !motorDirection; // Toggle motor direction
+    //TMR0_Reload(); // Reset the timer
+    //timerOverflowFlag = true;
+    timer_ms += 1;
+    if(timer_ms >= 1000){
+        timer_ms -= 1000;
+        timer_s += 1;
+    }
 }
 
+void UART1ISR(void){
+    EUSART1_Receive_ISR();
+    
+}
+
+void UART2ISR(void){
+    EUSART2_Receive_ISR();
+    
+    
+}
+
+int8_t readTemperature(void){
+    int8_t temperature = 0;
+    temperature = I2C1_Read1ByteRegister(TC74_ADDRESS,TEMPERATURE_READ);
+    return temperature;
+}
 /**
  End of File
 */
