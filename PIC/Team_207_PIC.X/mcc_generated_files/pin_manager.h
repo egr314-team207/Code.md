@@ -105,18 +105,6 @@
 #define DIR_SetAnalogMode()      do { ANSELAbits.ANSELA3 = 1; } while(0)
 #define DIR_SetDigitalMode()     do { ANSELAbits.ANSELA3 = 0; } while(0)
 
-// get/set RA4 procedures
-#define RA4_SetHigh()            do { LATAbits.LATA4 = 1; } while(0)
-#define RA4_SetLow()             do { LATAbits.LATA4 = 0; } while(0)
-#define RA4_Toggle()             do { LATAbits.LATA4 = ~LATAbits.LATA4; } while(0)
-#define RA4_GetValue()              PORTAbits.RA4
-#define RA4_SetDigitalInput()    do { TRISAbits.TRISA4 = 1; } while(0)
-#define RA4_SetDigitalOutput()   do { TRISAbits.TRISA4 = 0; } while(0)
-#define RA4_SetPullup()             do { WPUAbits.WPUA4 = 1; } while(0)
-#define RA4_ResetPullup()           do { WPUAbits.WPUA4 = 0; } while(0)
-#define RA4_SetAnalogMode()         do { ANSELAbits.ANSELA4 = 1; } while(0)
-#define RA4_SetDigitalMode()        do { ANSELAbits.ANSELA4 = 0; } while(0)
-
 // get/set DEBUG_LED aliases
 #define DEBUG_LED_TRIS                 TRISAbits.TRISA6
 #define DEBUG_LED_LAT                  LATAbits.LATA6
@@ -260,30 +248,6 @@
 #define RC4_ResetPullup()           do { WPUCbits.WPUC4 = 0; } while(0)
 #define RC4_SetAnalogMode()         do { ANSELCbits.ANSELC4 = 1; } while(0)
 #define RC4_SetDigitalMode()        do { ANSELCbits.ANSELC4 = 0; } while(0)
-
-// get/set RC5 procedures
-#define RC5_SetHigh()            do { LATCbits.LATC5 = 1; } while(0)
-#define RC5_SetLow()             do { LATCbits.LATC5 = 0; } while(0)
-#define RC5_Toggle()             do { LATCbits.LATC5 = ~LATCbits.LATC5; } while(0)
-#define RC5_GetValue()              PORTCbits.RC5
-#define RC5_SetDigitalInput()    do { TRISCbits.TRISC5 = 1; } while(0)
-#define RC5_SetDigitalOutput()   do { TRISCbits.TRISC5 = 0; } while(0)
-#define RC5_SetPullup()             do { WPUCbits.WPUC5 = 1; } while(0)
-#define RC5_ResetPullup()           do { WPUCbits.WPUC5 = 0; } while(0)
-#define RC5_SetAnalogMode()         do { ANSELCbits.ANSELC5 = 1; } while(0)
-#define RC5_SetDigitalMode()        do { ANSELCbits.ANSELC5 = 0; } while(0)
-
-// get/set RC7 procedures
-#define RC7_SetHigh()            do { LATCbits.LATC7 = 1; } while(0)
-#define RC7_SetLow()             do { LATCbits.LATC7 = 0; } while(0)
-#define RC7_Toggle()             do { LATCbits.LATC7 = ~LATCbits.LATC7; } while(0)
-#define RC7_GetValue()              PORTCbits.RC7
-#define RC7_SetDigitalInput()    do { TRISCbits.TRISC7 = 1; } while(0)
-#define RC7_SetDigitalOutput()   do { TRISCbits.TRISC7 = 0; } while(0)
-#define RC7_SetPullup()             do { WPUCbits.WPUC7 = 1; } while(0)
-#define RC7_ResetPullup()           do { WPUCbits.WPUC7 = 0; } while(0)
-#define RC7_SetAnalogMode()         do { ANSELCbits.ANSELC7 = 1; } while(0)
-#define RC7_SetDigitalMode()        do { ANSELCbits.ANSELC7 = 0; } while(0)
 
 /**
    @Param
