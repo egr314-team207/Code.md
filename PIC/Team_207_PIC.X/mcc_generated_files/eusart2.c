@@ -94,8 +94,8 @@ void EUSART2_Initialize(void)
     EUSART2_SetTxInterruptHandler(EUSART2_Transmit_ISR);
     // Set the EUSART2 module to the options selected in the user interface.
 
-    // ABDOVF no_overflow; SCKP Non-Inverted; BRG16 16bit_generator; WUE disabled; ABDEN disabled; 
-    BAUD2CON = 0x08;
+    // ABDOVF no_overflow; SCKP Non-Inverted; BRG16 16bit_generator; WUE disabled; ABDEN enabled; 
+    BAUD2CON = 0x09;
 
     // SPEN enabled; RX9 8-bit; CREN enabled; ADDEN disabled; SREN disabled; 
     RC2STA = 0x90;
@@ -103,11 +103,11 @@ void EUSART2_Initialize(void)
     // TX9 8-bit; TX9D 0; SENDB sync_break_complete; TXEN enabled; SYNC asynchronous; BRGH hi_speed; CSRC slave; 
     TX2STA = 0x24;
 
-    // SP2BRGL 25; 
-    SP2BRGL = 0x19;
+    // SP2BRGL 160; 
+    SP2BRGL = 0xA0;
 
-    // SP2BRGH 0; 
-    SP2BRGH = 0x00;
+    // SP2BRGH 1; 
+    SP2BRGH = 0x01;
 
 
     EUSART2_SetFramingErrorHandler(EUSART2_DefaultFramingErrorHandler);
@@ -193,6 +193,15 @@ void EUSART2_Write(uint8_t txData)
     PIE3bits.TX2IE = 1;
 }
 
+char getch(void)
+{
+    return EUSART2_Read();
+}
+
+void putch(char txData)
+{
+    EUSART2_Write(txData);
+}
 
 void EUSART2_Transmit_ISR(void)
 {

@@ -62,56 +62,68 @@
  */
 // Definitions 
 #define TC74_ADDRESS 0x4c // TC74A4-3.3VCT ADDRESS IS 0b1001100
-#define TEMPERATURE_READ 0x00 //RTR Read TEMP Register 
+#define TEMPERATURE_READ 0x00 //TC74 TEMPERATURE (C) READ REGISTER 
 #define AS5600_ADDRESS 0x36 //AS5600 ADDRESS IS 0b0110110
-#define AS_ANGLE1 0x0F //AS5600 ANLGE 11:8 Bits Register
+#define AS_ANGLE1 0x0F //AS5600 ANGLE 11:8 Bits Register
 #define AS_ANGLE2 0x0E //AS5600 ANGLE 7:0 Bits Register
-#define ANGLE_CHECK 0x800
-#define BUFFER_SIZE 256 
-#define MOTOR_RUN_TIME_MS 5000
+#define ANGLE_CHECK 0x400
+#define BUFFER_SIZE 256 //Size of UART Message Buffer
+#define MOTOR_RUN_TIME_MS 5000 //Time to run motor
+#define MS 1000 //Miliseconds in a second
+#define MOTORCW 0b11001111 //Command to run motor foreward
+#define MOTORCCW 0b11001101 //Command to run motor backwards
+#define MOTORDISABLE 0b11000000 //Command to disable motor
 
 //Global Variables
-uint8_t bur[2];
-uint16_t magnet;
-float A = 11.375;
-float degree = 0;
+//Temperature Variables
+int8_t temperature;
+int8_t temperatureCompare = 27;
+//Hall Effect Variables
+uint16_t angle;
+//Motor Driver Variables
 uint8_t motorDirection = 0; // 0 - Forward, 1 - Backward
-bool timerOverflowFlag = false;
-uint32_t motorStartTime = 0;
+//bool timerOverflowFlag = false;
+//uint32_t motorStartTime = 0;
+//Timer Variables
 uint16_t timer_ms = 0;
 uint16_t timer_s = 0;
 float time = 0.0;
-uint8_t ESP32RxBuffer[BUFFER_SIZE];
-uint8_t ESP32TxBuffer[BUFFER_SIZE];
-uint8_t rxByte;
+//Message Variables
+char ESP32RxBuffer[BUFFER_SIZE];
+char ESP32TxBuffer[BUFFER_SIZE];
+char rxByte;
 uint8_t rxIndex = 0;
-bool ESPrxComplete = false;
+bool ESPrxComplete = false; // Message Complete Flag
 uint8_t endingIndex = 0;
 uint8_t startingIndex = 0;
 uint8_t lengthMessage = 0;
-uint8_t messageTest[4];
+//Flags
+bool cwflag = true; // Motor Direction Flag
+
 
 //Function Declarations
 void motorControl(uint8_t enable);
-void timer0InterruptHandler(void);
-void UART1ISR(void); // Connected to Debug UART Header RX RC7 and TX RC5
+void timer2InterruptHandler(void);
+//void UART1ISR(void); // Connected to Debug UART Header RX RC7 and TX RC5
 void UART2ISR(void); // Connected to ESP32 Via RX RC0 and TX RC1
-void UART2WriteMessage(uint8_t *message, uint8_t startIndex, uint8_t length); // Write multiple bytes of data to form a full message
+//void UART2WriteMessage(char *message, uint8_t startIndex, uint8_t length); // Write multiple bytes of data to form a full message
 int8_t readTemperature(void); // Must be run after i2c is initialized
+uint16_t readAngle(void); // Must be run after i2c is initialized
+void processMessage(char msg[]); // Process message in char array
 
 
 void main(void)
 {
     // Initialize the device
     SYSTEM_Initialize();
-    EUSART1_Initialize();
+    TMR2_Initialize();
     I2C1_Initialize();
     PIN_MANAGER_Initialize();
 
     // Custom Interrupt Handler Declarations
-    EUSART1_SetRxInterruptHandler(* UART1ISR);
     EUSART2_SetRxInterruptHandler(* UART2ISR);
-    TMR0_SetInterruptHandler(* timer0InterruptHandler);
+    TMR2_SetInterruptHandler(* timer2InterruptHandler);
+    
     // If using interrupts in PIC18 High/Low Priority Mode you need to enable the Global High and Low Interrupts
     // If using interrupts in PIC Mid-Range Compatibility Mode you need to enable the Global and Peripheral Interrupts
     // Use the following macros to:
@@ -129,70 +141,56 @@ void main(void)
     //INTERRUPT_PeripheralInterruptDisable();
 
     SPI2_Open(SPI2_DEFAULT); //SPI activation
-    TMR0_StartTimer();
-    
+    TMR2_StartTimer();
     SSP2CON1bits.CKP = 0; // Clock Polarity (CPOL)
     SSP2STATbits.CKE = 0; // Clock Edge (CPHA)
     
-    uint8_t temp;
-    uint16_t angle;
-    bool motorRunning = false;    
-    bool thresholdCrossed = false;
+    //uint16_t angle;
+   // bool motorRunning = false;    
+   // bool thresholdCrossed = false;
     
     while (1)
     {
-        if (EUSART1_is_tx_ready()){
-            temp = I2C1_Read1ByteRegister(TC74_ADDRESS, TEMPERATURE_READ);
-            __delay_ms(200);
+        temperature = readTemperature();
+        __delay_ms(200);
+        //printf("Temperature: %i C\n",temperature);
 
-            uint8_t data1 = 0x00;
-            uint8_t data2 = 0x00;
-            uint16_t angle = 0x00;
+        //uint8_t data1 = 0x00;
+        //uint8_t data2 = 0x00;
+        uint16_t angle = 0x00;
 
-            // Read the angle from the AS5600 sensor
-            data1 = I2C1_Read1ByteRegister(0x36, AS_ANGLE1);
-            data2 = I2C1_Read1ByteRegister(0x36, AS_ANGLE2);
+        // Read the angle from the AS5600 sensor
+        //data1 = I2C1_Read1ByteRegister(0x36, AS_ANGLE1);
+        //data2 = I2C1_Read1ByteRegister(0x36, AS_ANGLE2);
 
-            angle = data1 << 8;
-            angle += data2;
-            
-            
-            /*if(temp >= 27 || magnet > ANGLE_CHECK){
-                DEBUG_LED_SetHigh(); //Turn on Debug LED
-                motorControl(1); //Enable Motor
-            } else{
-                DEBUG_LED_SetLow(); // Turn off Debug LED
-                motorControl(0); // Disable motor
-            }*/
-             if ((temp >= 27 || angle > ANGLE_CHECK) && !motorRunning && !thresholdCrossed) {
-                motorControl(1); // Enable motor
-                motorRunning = true;
-                motorStartTime = TMR0_ReadTimer();
-                thresholdCrossed = true;
-            } else if (!thresholdCrossed) {
-                motorDirection = !motorDirection; // Toggle motor direction
-                motorControl(1); // Enable motor
-                motorRunning = true;
-                motorStartTime = TMR0_ReadTimer();
-                thresholdCrossed = true;
-                }
-             if (motorRunning && (TMR0_ReadTimer() - motorStartTime) >= MOTOR_RUN_TIME_MS) {
-                motorControl(0); // Disable motor
-                motorRunning = false;
-                motorDirection = !motorDirection; // Toggle motor direction
-                }
+        //angle = data1 << 8;
+        //angle += data2;
+
+        //bur[0] = I2C1_Read1ByteRegister(0x36, 0x0E);
+        //bur[1] = I2C1_Read1ByteRegister(0x36, 0x0F);
+       // magnet = bur[0] << 8 | bur[1];
+        //bur[0] = I2C1_Read1ByteRegister(0x36, 0x1B);
+        //bur[1] = I2C1_Read1ByteRegister(0x36, 0x1C);
+        //magnet = bur[0] << 8 | bur[1];
+        angle = readAngle();
+        printf("Temp:%iC Angle:%i\n",temperature,angle);
+
+        if (temperature >= temperatureCompare || angle > ANGLE_CHECK){
+            DEBUG_LED_SetHigh(); // Turn on Debug LED
+            motorControl(1); // Enable motor
+        } else {
+            DEBUG_LED_SetLow(); // Turn off Debug LED
+            motorControl(0); // Disable motor
         }
+    
         __delay_ms(50);
         if(ESPrxComplete){
             //UART2WriteMessage(*ESP32RxBuffer, startingIndex, lengthMessage);
+            printf(ESP32RxBuffer);
             ESPrxComplete = false;
         }
-        messageTest[0] = 0;
-        messageTest[1] = 1;
-        messageTest[2] = 2;
-        messageTest[3] = ';';
-        
-        //UART2WriteMessage(*messageTest, 0, 3);
+           // printf("test message\n");
+
     }
     SPI2_Close();
 }
@@ -201,7 +199,7 @@ void motorControl(uint8_t enable) {
     uint8_t command;
 
     if (enable) {
-        command = motorDirection ? 0b11001011 : 0b11001111; // Enable motor with direction control
+        command = motorDirection ? 0b11001101 : 0b11001111; // Enable motor with direction control
     } else {
         command = 0b11000000; // Disable motor
     }
@@ -214,22 +212,17 @@ void motorControl(uint8_t enable) {
     __delay_us(50);  // Add a small delay between sending commands
 }
 
-void timer0InterruptHandler(void) {
-    //motorControl(0); // Disable motor
-    //motorDirection = !motorDirection; // Toggle motor direction
-    //TMR0_Reload(); // Reset the timer
-    //timerOverflowFlag = true;
+
+void timer2InterruptHandler(void) {
     timer_ms += 1;
     if(timer_ms >= 1000){
         timer_ms -= 1000;
         timer_s += 1;
     }
+    time = timer_s + (float)timer_ms/MS;
 }
 
-void UART1ISR(void){
-    EUSART1_Receive_ISR();
-    
-}
+
 
 void UART2ISR(void){
     EUSART2_Receive_ISR();
@@ -241,6 +234,8 @@ void UART2ISR(void){
         ESPrxComplete = true;
         endingIndex = rxIndex;
         lengthMessage = endingIndex - startingIndex;
+        ESP32RxBuffer[rxIndex + 1] = '\n';
+        rxIndex = 0;
     }
     if(rxByte == '_'){
         startingIndex = rxIndex;
@@ -252,20 +247,27 @@ void UART2ISR(void){
         rxIndex++;
     }
     DEBUG_LED_Toggle();
-    
-}
-
-void UART2WriteMessage(uint8_t *message, uint8_t startIndex, uint8_t length){
-    uint8_t i;
-    for(i = 0; i < length; i++){
-        EUSART2_Write(message[startIndex+i]);
-    }
 }
 
 int8_t readTemperature(void){
-    int8_t temperature = 0;
-    temperature = I2C1_Read1ByteRegister(TC74_ADDRESS,TEMPERATURE_READ);
-    return temperature;
+    int8_t temperatureValue = 0;
+    temperatureValue = I2C1_Read1ByteRegister(TC74_ADDRESS,TEMPERATURE_READ);
+    return temperatureValue;
+}
+
+uint16_t readAngle(void){
+    uint16_t angleOutput;
+    uint8_t angle0to7;
+    uint8_t angle11to8;
+    angle0to7 = I2C1_Read1ByteRegister(AS5600_ADDRESS,AS_ANGLE2);
+    angle11to8 = I2C1_Read1ByteRegister(AS5600_ADDRESS,AS_ANGLE1);
+    angleOutput = angle11to8 << 8;
+    angleOutput += angle0to7;
+    return angleOutput;
+}
+
+void processMessage(char msg[]){
+    
 }
 /**
  End of File
