@@ -53,6 +53,8 @@
  * Daymon Wilkins
  */
 
+#include <stdlib.h>
+
 #include "mcc_generated_files/mcc.h"
 #include "mcc_generated_files/examples/i2c1_master_example.h"
 
@@ -64,24 +66,35 @@
 #define TC74_ADDRESS 0x4c // TC74A4-3.3VCT ADDRESS IS 0b1001100
 #define TEMPERATURE_READ 0x00 //TC74 TEMPERATURE (C) READ REGISTER 
 #define AS5600_ADDRESS 0x36 //AS5600 ADDRESS IS 0b0110110
-#define AS_ANGLE1 0x0F //AS5600 ANGLE 11:8 Bits Register
-#define AS_ANGLE2 0x0E //AS5600 ANGLE 7:0 Bits Register
-#define ANGLE_CHECK 0x400
+#define AS_ANGLE1 0x0C //AS5600 ANGLE 11:8 Bits Register
+#define AS_ANGLE2 0x0D //AS5600 ANGLE 7:0 Bits Register
+#define ANGLE_CHECK 400
+#define DEGREES 360 // Degrees in a circle
+#define ANGLE_DIVISONS 1024; // Counts per Rev
+#define RPM_MS 0.10; //Seconds between measurements used for RPM calculations
 #define BUFFER_SIZE 256 //Size of UART Message Buffer
-#define MOTOR_RUN_TIME_MS 5000 //Time to run motor
+#define MOTOR_RUN_TIME_S 5 //Time to run motor
 #define MS 1000 //Miliseconds in a second
-#define MOTORCW 0b11001111 //Command to run motor foreward
-#define MOTORCCW 0b11001101 //Command to run motor backwards
+#define MOTORCW 0b11101111 //Command to run motor foreward
+#define MOTORCCW 0b11101101 //Command to run motor backwards
 #define MOTORDISABLE 0b11000000 //Command to disable motor
 
 //Global Variables
 //Temperature Variables
 int8_t temperature;
-int8_t temperatureCompare = 27;
+int8_t temperatureCompare = 30;
 //Hall Effect Variables
 uint16_t angle;
+float processedAngle;
+float angleConversionMultiplier = (float)1024/(float)360;
+float angleStartTime = 0;
+float angleTimer = RPM_MS;
+float rpm = 0;
 //Motor Driver Variables
 uint8_t motorDirection = 0; // 0 - Forward, 1 - Backward
+float motorStartTime = 0; // Time motor started running
+bool clockwise = true;
+bool enableMotor = false;
 //bool timerOverflowFlag = false;
 //uint32_t motorStartTime = 0;
 //Timer Variables
@@ -99,18 +112,28 @@ uint8_t startingIndex = 0;
 uint8_t lengthMessage = 0;
 //Flags
 bool cwflag = true; // Motor Direction Flag
+bool doorOpened = false;
+bool motorStart = false;
+bool motorComplete = false;
+bool tempThresholdCrossed = false;
+bool angleThresholdCrossed = false;
+bool lowTemp = true;
+bool hasMotorStarted = false;
+bool angleStartMeasurment = true;
+bool rpmChanged = false;
+
 
 
 //Function Declarations
 void motorControl(uint8_t enable);
+void runMotorForDuration(bool enable, bool cw, uint16_t seconds);
 void timer2InterruptHandler(void);
-//void UART1ISR(void); // Connected to Debug UART Header RX RC7 and TX RC5
 void UART2ISR(void); // Connected to ESP32 Via RX RC0 and TX RC1
-//void UART2WriteMessage(char *message, uint8_t startIndex, uint8_t length); // Write multiple bytes of data to form a full message
 int8_t readTemperature(void); // Must be run after i2c is initialized
 uint16_t readAngle(void); // Must be run after i2c is initialized
 void processMessage(char msg[]); // Process message in char array
-
+void sendMotorCommand(uint8_t commmand); // Send Command to run on SPI Motor
+void measureRPM(void); // Measure the RPM of the Hall Effect Sensor
 
 void main(void)
 {
@@ -145,51 +168,47 @@ void main(void)
     SSP2CON1bits.CKP = 0; // Clock Polarity (CPOL)
     SSP2STATbits.CKE = 0; // Clock Edge (CPHA)
     
-    //uint16_t angle;
-   // bool motorRunning = false;    
-   // bool thresholdCrossed = false;
-    
     while (1)
     {
         temperature = readTemperature();
-        __delay_ms(200);
-        //printf("Temperature: %i C\n",temperature);
-
-        //uint8_t data1 = 0x00;
-        //uint8_t data2 = 0x00;
-        uint16_t angle = 0x00;
-
-        // Read the angle from the AS5600 sensor
-        //data1 = I2C1_Read1ByteRegister(0x36, AS_ANGLE1);
-        //data2 = I2C1_Read1ByteRegister(0x36, AS_ANGLE2);
-
-        //angle = data1 << 8;
-        //angle += data2;
-
-        //bur[0] = I2C1_Read1ByteRegister(0x36, 0x0E);
-        //bur[1] = I2C1_Read1ByteRegister(0x36, 0x0F);
-       // magnet = bur[0] << 8 | bur[1];
-        //bur[0] = I2C1_Read1ByteRegister(0x36, 0x1B);
-        //bur[1] = I2C1_Read1ByteRegister(0x36, 0x1C);
-        //magnet = bur[0] << 8 | bur[1];
         angle = readAngle();
-        printf("Temp:%iC Angle:%i\n",temperature,angle);
-
-        if (temperature >= temperatureCompare || angle > ANGLE_CHECK){
-            DEBUG_LED_SetHigh(); // Turn on Debug LED
-            motorControl(1); // Enable motor
-        } else {
-            DEBUG_LED_SetLow(); // Turn off Debug LED
-            motorControl(0); // Disable motor
+        processedAngle = (float)angle / angleConversionMultiplier;
+        measureRPM();
+        if(rpmChanged){
+            angleStartMeasurment = true;
+            rpmChanged = false;
+            printf("Temp:%iC Angle:%u,%f,%f\n",temperature,angle,processedAngle,rpm);
         }
-    
-        __delay_ms(50);
+       // __delay_ms(200);
+
+
+         //printf("Temp:%iC Angle:%u,%f,%f\n",temperature,angle,processedAngle,rpm);
+
+         if(temperature >= temperatureCompare){
+             if(lowTemp){
+                 lowTemp = false;
+                 hasMotorStarted = false;
+             }
+             clockwise = true;
+             enableMotor = true;
+             //runMotorForDuration(enableMotor,clockwise,2);   
+         }
+         if(temperature < temperatureCompare){
+             if(!lowTemp){
+                 lowTemp = true;
+                 hasMotorStarted = false;
+             }
+             clockwise = false;
+             enableMotor = true;
+             //runMotorForDuration(enableMotor,clockwise,2);  
+         }
+         runMotorForDuration(enableMotor,clockwise,2);
+        //__delay_ms(50);
         if(ESPrxComplete){
-            //UART2WriteMessage(*ESP32RxBuffer, startingIndex, lengthMessage);
             printf(ESP32RxBuffer);
             ESPrxComplete = false;
         }
-           // printf("test message\n");
+        // printf("test message\n");
 
     }
     SPI2_Close();
@@ -197,21 +216,53 @@ void main(void)
 
 void motorControl(uint8_t enable) {
     uint8_t command;
+    uint16_t duration_s = MOTOR_RUN_TIME_S;
 
     if (enable) {
-        command = motorDirection ? 0b11001101 : 0b11001111; // Enable motor with direction control
+        command = motorDirection ? MOTORCCW : MOTORCW; // Enable motor with direction control
     } else {
-        command = 0b11000000; // Disable motor
+        command = MOTORDISABLE; // Disable motor
     }
+    sendMotorCommand(command);
+    if (enable) {
+        motorStartTime = time; // Save the current time
+        while (time - motorStartTime < duration_s) {
+            // Wait for the motor to run for the specified duration
+        }
+        sendMotorCommand(command);
+    }
+}
 
+void runMotorForDuration(bool enable, bool cw, uint16_t seconds) {
+    uint8_t command;
+    if(!hasMotorStarted){
+        motorStartTime = time;
+        hasMotorStarted = true;
+    }
+    if(cw){
+        command = MOTORCW;
+    }else{
+        command = MOTORCCW;
+    }
+    if(!enable){
+        command = MOTORDISABLE;
+    }
+    if(hasMotorStarted && enable){
+        if(time - motorStartTime > seconds){
+            command = MOTORDISABLE;
+        } 
+    }
+    sendMotorCommand(command);
+}
+
+void sendMotorCommand(uint8_t commandSend){
     SPI2_SS_SetLow(); // Set SS (RB1) low to start communication
     __delay_us(50);
-    SPI2_WriteByte(command); // Send the command 
+    SPI2_WriteByte(commandSend); // Send the command 
     __delay_us(50); // Add a small delay between sending commands
     SPI2_SS_SetHigh(); // Set SS (RB1) high to end communication
     __delay_us(50);  // Add a small delay between sending commands
 }
-
 
 void timer2InterruptHandler(void) {
     timer_ms += 1;
@@ -263,11 +314,32 @@ uint16_t readAngle(void){
     angle11to8 = I2C1_Read1ByteRegister(AS5600_ADDRESS,AS_ANGLE1);
     angleOutput = angle11to8 << 8;
     angleOutput += angle0to7;
+    angleOutput = angleOutput >> 2;
     return angleOutput;
 }
 
 void processMessage(char msg[]){
     
+}
+
+void measureRPM(void){
+    uint16_t firstAngle;
+    uint16_t secondAngle;
+    uint16_t deltaAngle;
+    float loopTime;
+    
+    if(angleStartMeasurment){
+        angleStartTime = time;
+        firstAngle = readAngle();
+    }
+    loopTime = time - angleStartTime;
+    if(loopTime >= angleTimer){
+        secondAngle = readAngle();
+        deltaAngle = secondAngle - firstAngle;
+        rpm = (float)deltaAngle / loopTime;
+        rpmChanged = true;
+    }
+
 }
 /**
  End of File
