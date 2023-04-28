@@ -54,7 +54,6 @@
  */
 
 #include <stdlib.h>
-
 #include "mcc_generated_files/mcc.h"
 #include "mcc_generated_files/examples/i2c1_master_example.h"
 
@@ -71,13 +70,14 @@
 #define ANGLE_CHECK 400
 #define DEGREES 360 // Degrees in a circle
 #define ANGLE_DIVISONS 1024; // Counts per Rev
-#define RPM_MS 0.10; //Seconds between measurements used for RPM calculations
+#define RPM_S 0.10; //Seconds between measurements used for RPM calculations
 #define BUFFER_SIZE 256 //Size of UART Message Buffer
-#define MOTOR_RUN_TIME_S 5 //Time to run motor
+#define MOTOR_RUN_TIME_S 2 //Time to run motor
 #define MS 1000 //Miliseconds in a second
 #define MOTORCW 0b11101111 //Command to run motor foreward
 #define MOTORCCW 0b11101101 //Command to run motor backwards
 #define MOTORDISABLE 0b11000000 //Command to disable motor
+#define SENSOR_PERIOD_S 1 //Frequency of reading sensor measurments
 
 //Global Variables
 //Temperature Variables
@@ -85,10 +85,17 @@ int8_t temperature;
 int8_t temperatureCompare = 30;
 //Hall Effect Variables
 uint16_t angle;
+uint16_t startingAngle = 0;
+uint16_t endingAngle = 0;
+uint16_t deltaAngle = 0;
+uint16_t angleDivs = ANGLE_DIVISONS;
 float processedAngle;
 float angleConversionMultiplier = (float)1024/(float)360;
 float angleStartTime = 0;
-float angleTimer = RPM_MS;
+float angleTimer = RPM_S;
+float angleEndingTime;
+float angleDeltaTime;
+float angleCountsPerTimeInterval = 0;
 float rpm = 0;
 //Motor Driver Variables
 uint8_t motorDirection = 0; // 0 - Forward, 1 - Backward
@@ -101,6 +108,9 @@ bool enableMotor = false;
 uint16_t timer_ms = 0;
 uint16_t timer_s = 0;
 float time = 0.0;
+float loopRunningTime = 0.0;
+float loopStartTime = 0.0;
+float sensorUpdateTimer = 0.25;
 //Message Variables
 char ESP32RxBuffer[BUFFER_SIZE];
 char ESP32TxBuffer[BUFFER_SIZE];
@@ -111,6 +121,12 @@ uint8_t endingIndex = 0;
 uint8_t startingIndex = 0;
 uint8_t lengthMessage = 0;
 //Flags
+bool loopNotStarted = true;
+bool readSensors = true;
+bool sensorsDone = false;
+bool noStartingAngle = true;
+bool noEndingAngle = true;
+bool txSensors = true;
 bool cwflag = true; // Motor Direction Flag
 bool doorOpened = false;
 bool motorStart = false;
@@ -119,13 +135,11 @@ bool tempThresholdCrossed = false;
 bool angleThresholdCrossed = false;
 bool lowTemp = true;
 bool hasMotorStarted = false;
-bool angleStartMeasurment = true;
 bool rpmChanged = false;
 
 
 
 //Function Declarations
-void motorControl(uint8_t enable);
 void runMotorForDuration(bool enable, bool cw, uint16_t seconds);
 void timer2InterruptHandler(void);
 void UART2ISR(void); // Connected to ESP32 Via RX RC0 and TX RC1
@@ -133,7 +147,6 @@ int8_t readTemperature(void); // Must be run after i2c is initialized
 uint16_t readAngle(void); // Must be run after i2c is initialized
 void processMessage(char msg[]); // Process message in char array
 void sendMotorCommand(uint8_t commmand); // Send Command to run on SPI Motor
-void measureRPM(void); // Measure the RPM of the Hall Effect Sensor
 
 void main(void)
 {
@@ -170,19 +183,57 @@ void main(void)
     
     while (1)
     {
-        temperature = readTemperature();
+        if(loopNotStarted){
+            //Reset all flags to start of loop states
+            readSensors = true;
+            noStartingAngle = true;
+            noEndingAngle = true;
+            rpmChanged = false;
+            loopStartTime = time;
+            sensorsDone = false;
+            loopNotStarted = false;
+        }
+        while(readSensors){
+            loopRunningTime = time - loopStartTime;
+            if(sensorsDone){
+                break;
+            }
+            if(noStartingAngle){
+                startingAngle = readAngle();
+                noStartingAngle = false;
+            }
+            if(loopRunningTime >= angleTimer && noEndingAngle){
+                endingAngle = readAngle();
+                angleEndingTime = time;
+                noEndingAngle = false;
+            }
+            temperature = readTemperature();
+            if(temperature < temperatureCompare){
+                //closePlanter = true;
+                //break;
+            }
+            if(startingAngle > endingAngle && !noEndingAngle){
+                // Rotated past 0 correction
+                endingAngle += ANGLE_DIVISONS;
+            }
+            deltaAngle = endingAngle - startingAngle;
+            if(deltaAngle > angleDivs){
+                deltaAngle -= ANGLE_DIVISONS;
+            }
+            if(!noStartingAngle && !noEndingAngle){
+                angleDeltaTime = angleEndingTime - loopStartTime;
+                angleCountsPerTimeInterval = (float) deltaAngle / angleDeltaTime;
+                sensorsDone = true;
+                txSensors = true;
+            }   
+        }
+
         angle = readAngle();
         processedAngle = (float)angle / angleConversionMultiplier;
-        measureRPM();
-        if(rpmChanged){
-            angleStartMeasurment = true;
-            rpmChanged = false;
-            printf("Temp:%iC Angle:%u,%f,%f\n",temperature,angle,processedAngle,rpm);
+        if(sensorsDone && txSensors){
+            txSensors = false;
+            printf("Temp:%iC Angle:%u,%f,%f\n",temperature,angle,processedAngle,angleCountsPerTimeInterval);
         }
-       // __delay_ms(200);
-
-
-         //printf("Temp:%iC Angle:%u,%f,%f\n",temperature,angle,processedAngle,rpm);
 
          if(temperature >= temperatureCompare){
              if(lowTemp){
@@ -190,8 +241,7 @@ void main(void)
                  hasMotorStarted = false;
              }
              clockwise = true;
-             enableMotor = true;
-             //runMotorForDuration(enableMotor,clockwise,2);   
+             enableMotor = true; 
          }
          if(temperature < temperatureCompare){
              if(!lowTemp){
@@ -200,21 +250,22 @@ void main(void)
              }
              clockwise = false;
              enableMotor = true;
-             //runMotorForDuration(enableMotor,clockwise,2);  
          }
          runMotorForDuration(enableMotor,clockwise,2);
         //__delay_ms(50);
         if(ESPrxComplete){
-            printf(ESP32RxBuffer);
+            printf("%s",ESP32RxBuffer);
             ESPrxComplete = false;
         }
         // printf("test message\n");
-
+         if(loopRunningTime >= sensorUpdateTimer){
+             loopNotStarted = true;
+         }
     }
     SPI2_Close();
 }
 
-void motorControl(uint8_t enable) {
+/*void motorControl(uint8_t enable) {
     uint8_t command;
     uint16_t duration_s = MOTOR_RUN_TIME_S;
 
@@ -231,7 +282,7 @@ void motorControl(uint8_t enable) {
         }
         sendMotorCommand(command);
     }
-}
+}*/
 
 void runMotorForDuration(bool enable, bool cw, uint16_t seconds) {
     uint8_t command;
@@ -283,13 +334,8 @@ void UART2ISR(void){
     ESP32RxBuffer[rxIndex] = rxByte;
     if(rxByte == ';'){
         ESPrxComplete = true;
-        endingIndex = rxIndex;
-        lengthMessage = endingIndex - startingIndex;
         ESP32RxBuffer[rxIndex + 1] = '\n';
         rxIndex = 0;
-    }
-    if(rxByte == '_'){
-        startingIndex = rxIndex;
     }
     if(rxIndex >= 255){
         rxIndex = 0;
@@ -322,25 +368,6 @@ void processMessage(char msg[]){
     
 }
 
-void measureRPM(void){
-    uint16_t firstAngle;
-    uint16_t secondAngle;
-    uint16_t deltaAngle;
-    float loopTime;
-    
-    if(angleStartMeasurment){
-        angleStartTime = time;
-        firstAngle = readAngle();
-    }
-    loopTime = time - angleStartTime;
-    if(loopTime >= angleTimer){
-        secondAngle = readAngle();
-        deltaAngle = secondAngle - firstAngle;
-        rpm = (float)deltaAngle / loopTime;
-        rpmChanged = true;
-    }
-
-}
 /**
  End of File
 */
