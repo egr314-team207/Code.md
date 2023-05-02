@@ -232,10 +232,10 @@ void main(void)
         processedAngle = (float)angle / angleConversionMultiplier;
         if(sensorsDone && txSensors){
             txSensors = false;
-            printf("Temp:%iC Angle:%u,%f,%f\n",temperature,angle,processedAngle,angleCountsPerTimeInterval);
+            printf("Temp:%iC Angle Speed:%f\n",temperature,angleCountsPerTimeInterval);
         }
 
-         if(temperature >= temperatureCompare){
+         if(temperature >= temperatureCompare || angleCountsPerTimeInterval >0){
              if(lowTemp){
                  lowTemp = false;
                  hasMotorStarted = false;
@@ -243,7 +243,7 @@ void main(void)
              clockwise = true;
              enableMotor = true; 
          }
-         if(temperature < temperatureCompare){
+         if(temperature < temperatureCompare && angleCountsPerTimeInterval == 0){
              if(!lowTemp){
                  lowTemp = true;
                  hasMotorStarted = false;
